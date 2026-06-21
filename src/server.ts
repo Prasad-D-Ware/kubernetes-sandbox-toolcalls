@@ -1,3 +1,4 @@
+import "dotenv/config"; // load .env into process.env before anything reads config
 import {
   CoordinationV1Api,
   CoreV1Api,

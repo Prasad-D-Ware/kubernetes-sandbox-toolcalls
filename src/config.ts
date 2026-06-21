@@ -56,7 +56,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const poolSize = num("SANDBOX_POOL_SIZE", env.SANDBOX_POOL_SIZE, 8);
   const podPrefix = env.SANDBOX_POD_PREFIX ?? "sandbox-runner";
 
-  const providerEnvVar = Object.keys(PROVIDER_KEY_VARS).find((v) => env[v] && env[v]!.trim() !== "");
+  const isUsableKey = (v: string | undefined): boolean =>
+    !!v && v.trim() !== "" && !/x{4,}/i.test(v); // ignore .env.example placeholders like sk-...xxxx
+  const providerEnvVar = Object.keys(PROVIDER_KEY_VARS).find((v) => isUsableKey(env[v]));
   if (!providerEnvVar) {
     throw new MissingCredentialsError(
       `No Pi provider credential found. Set one of: ${Object.keys(PROVIDER_KEY_VARS).join(", ")}. ` +
