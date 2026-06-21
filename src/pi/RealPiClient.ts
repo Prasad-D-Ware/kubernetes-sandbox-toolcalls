@@ -6,14 +6,53 @@ import {
   defineTool,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import type { AppConfig } from "../config.js";
+import type { SandboxToolName } from "../sandbox/SandboxToolRunner.js";
 import type { AppLogger } from "../logging.js";
 import { LogEvent } from "../logging.js";
 import type { SandboxToolRunner } from "../sandbox/SandboxToolRunner.js";
 import { SandboxCapacityTimeoutError } from "../lease/types.js";
 import type { ToolResult } from "../sandbox/types.js";
 import type { ChatInput, ChatResult, PiClient, ToolCallMeta } from "./types.js";
+
+interface SandboxToolSpec {
+  /** Name registered with the LLM provider. Must match OpenAI's ^[a-zA-Z0-9_-]+$. */
+  llmName: string;
+  /** Canonical (assignment) name used for validation + toolCalls[] metadata. */
+  canonical: SandboxToolName;
+  label: string;
+  description: string;
+  parameters: TSchema;
+}
+
+/**
+ * Tool registry. The LLM sees dot-free names (OpenAI rejects dots in tool names);
+ * everything internal/observable uses the canonical dotted names from the spec.
+ */
+export const SANDBOX_TOOL_SPECS: SandboxToolSpec[] = [
+  {
+    llmName: "shell_run",
+    canonical: "shell.run",
+    label: "Run shell command",
+    description: "Run an allowlisted shell command (pwd, ls, cat, node --version, whoami) inside the sandbox pod.",
+    parameters: Type.Object({ command: Type.String({ description: "Allowlisted command, e.g. 'ls' or 'pwd'" }) }),
+  },
+  {
+    llmName: "fs_read",
+    canonical: "fs.read",
+    label: "Read file",
+    description: "Read a file from the allowed directory inside the sandbox pod.",
+    parameters: Type.Object({ path: Type.String({ description: "Path relative to the sandbox root" }) }),
+  },
+  {
+    llmName: "env_inspect",
+    canonical: "env.inspect",
+    label: "Inspect environment",
+    description: "Return pod name, namespace, working directory, user, and runtime versions.",
+    parameters: Type.Object({}),
+  },
+];
 
 /**
  * RealPiClient — the production agent loop, backed by the real Pi TypeScript SDK
@@ -79,42 +118,25 @@ export class RealPiClient implements PiClient {
       }
     };
 
-    const shellRun = defineTool({
-      name: "shell.run",
-      label: "Run shell command",
-      description:
-        "Run an allowlisted shell command (pwd, ls, cat, node --version, whoami) inside the sandbox pod.",
-      parameters: Type.Object({ command: Type.String({ description: "Allowlisted command" }) }),
-      execute: async (toolCallId, params) => {
-        const r = await runTool("shell.run", toolCallId, params as Record<string, unknown>);
-        return { content: [{ type: "text", text: r.output }], details: r };
-      },
-    });
-
-    const fsRead = defineTool({
-      name: "fs.read",
-      label: "Read file",
-      description: "Read a file from the allowed directory inside the sandbox pod.",
-      parameters: Type.Object({ path: Type.String({ description: "Path relative to the sandbox root" }) }),
-      execute: async (toolCallId, params) => {
-        const r = await runTool("fs.read", toolCallId, params as Record<string, unknown>);
-        return { content: [{ type: "text", text: r.output }], details: r };
-      },
-    });
-
-    const envInspect = defineTool({
-      name: "env.inspect",
-      label: "Inspect environment",
-      description: "Return pod name, namespace, working directory, user, and runtime versions.",
-      parameters: Type.Object({}),
-      execute: async (toolCallId, params) => {
-        const r = await runTool("env.inspect", toolCallId, params as Record<string, unknown>);
-        const text = `pod=${r.pod}\nnamespace=${this.config.namespace}\n${r.output}`;
-        return { content: [{ type: "text", text }], details: r };
-      },
-    });
-
-    return [shellRun, fsRead, envInspect];
+    // Register OpenAI-safe names with the LLM (no dots — OpenAI requires
+    // ^[a-zA-Z0-9_-]+$), but keep the canonical dotted names for validation and
+    // for the toolCalls[] metadata the API contract requires.
+    return SANDBOX_TOOL_SPECS.map((spec) =>
+      defineTool({
+        name: spec.llmName,
+        label: spec.label,
+        description: spec.description,
+        parameters: spec.parameters,
+        execute: async (toolCallId, params) => {
+          const r = await runTool(spec.canonical, toolCallId, params as Record<string, unknown>);
+          const text =
+            spec.canonical === "env.inspect"
+              ? `pod=${r.pod}\nnamespace=${this.config.namespace}\n${r.output}`
+              : r.output;
+          return { content: [{ type: "text", text }], details: r };
+        },
+      }),
+    );
   }
 
   async runChat(input: ChatInput): Promise<ChatResult> {
