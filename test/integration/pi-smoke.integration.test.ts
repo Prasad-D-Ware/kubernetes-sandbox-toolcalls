@@ -16,7 +16,21 @@ import { RealPiClient } from "../../src/pi/RealPiClient.js";
  * Requires: a running kind cluster with manifests applied AND valid Pi credentials
  * (e.g. ANTHROPIC_API_KEY). Enable with RUN_INTEGRATION=1.
  */
-const ENABLED = process.env.RUN_INTEGRATION === "1" && Boolean(process.env.ANTHROPIC_API_KEY);
+// Enabled when integration mode is on AND any supported provider key is present.
+const PROVIDER_KEYS = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GEMINI_API_KEY",
+  "GROQ_API_KEY",
+  "XAI_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "MISTRAL_API_KEY",
+];
+const hasProviderKey = PROVIDER_KEYS.some((k) => {
+  const v = process.env[k];
+  return !!v && v.trim() !== "" && !/x{4,}/i.test(v);
+});
+const ENABLED = process.env.RUN_INTEGRATION === "1" && hasProviderKey;
 
 describe.skipIf(!ENABLED)("Pi-backed sandbox smoke test", () => {
   let piClient: RealPiClient;
