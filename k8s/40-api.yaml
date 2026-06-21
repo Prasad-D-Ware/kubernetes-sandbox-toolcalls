@@ -1,0 +1,101 @@
+# API service Deployment + Service. For the local demo you may instead run the API
+# on your host (npm run dev) against the kind cluster; this manifest is provided so
+# the service can also run in-cluster with the scoped ServiceAccount above.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pi-api
+  namespace: pi-sandbox
+  labels:
+    app: pi-api
+spec:
+  replicas: 1 # single replica: the FIFO capacity queue is process-local (ADR-0004)
+  selector:
+    matchLabels:
+      app: pi-api
+  template:
+    metadata:
+      labels:
+        app: pi-api
+    spec:
+      serviceAccountName: pi-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pi-api
+          image: pi-sandbox-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: pi-api-config
+          env:
+            # Provide the provider key via a Secret (create it yourself, never commit it):
+            #   kubectl -n pi-sandbox create secret generic pi-credentials \
+            #     --from-literal=ANTHROPIC_API_KEY=sk-ant-...
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pi-credentials
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pi-api-config
+  namespace: pi-sandbox
+data:
+  SANDBOX_NAMESPACE: "pi-sandbox"
+  SANDBOX_POOL_SIZE: "8"
+  SANDBOX_POD_PREFIX: "sandbox-runner"
+  SANDBOX_CONTAINER: "runner"
+  SANDBOX_FS_ROOT: "/workspace"
+  MAX_QUEUE_WAIT_SECONDS: "15"
+  TOOL_EXECUTION_TIMEOUT_SECONDS: "30"
+  LEASE_TTL_SECONDS: "45"
+  SERVICE_INSTANCE_ID: "api-1"
+  PI_MODEL: "claude-sonnet-4-6"
+  PORT: "3000"
+  LOG_LEVEL: "info"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pi-api
+  namespace: pi-sandbox
+spec:
+  selector:
+    app: pi-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000

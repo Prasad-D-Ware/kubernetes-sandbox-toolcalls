@@ -1,0 +1,43 @@
+# Namespace-scoped RBAC for the API service. No cluster-wide permissions.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pi-api
+  namespace: pi-sandbox
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pi-api
+  namespace: pi-sandbox
+rules:
+  # Discover sandbox pods and their readiness.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # Execute tools inside leased pods (ADR-0002).
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # Optional: read pod logs for debugging.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Leases are the lock source of truth (ADR-0003).
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pi-api
+  namespace: pi-sandbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pi-api
+subjects:
+  - kind: ServiceAccount
+    name: pi-api
+    namespace: pi-sandbox

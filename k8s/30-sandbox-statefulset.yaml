@@ -1,0 +1,73 @@
+# Headless Service gives the StatefulSet stable pod DNS + ordinals.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox
+  namespace: pi-sandbox
+spec:
+  clusterIP: None
+  selector:
+    app: sandbox-runner
+  ports:
+    - name: noop
+      port: 9999
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sandbox-runner
+  namespace: pi-sandbox
+spec:
+  serviceName: sandbox
+  replicas: 8 # exactly 8 warm sandbox pods -> sandbox-runner-0 .. sandbox-runner-7
+  selector:
+    matchLabels:
+      app: sandbox-runner
+  template:
+    metadata:
+      labels:
+        app: sandbox-runner
+    spec:
+      # Hardening: non-root, no privilege escalation, no host mounts.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          image: node:20-alpine
+          workingDir: /workspace
+          # Seed a tiny workspace so fs.read/ls have content, then idle.
+          command: ["/bin/sh", "-c"]
+          args:
+            - >
+              mkdir -p /workspace/src &&
+              printf '{\n  "name": "sandbox"\n}\n' > /workspace/package.json &&
+              printf 'console.log("hello from sandbox");\n' > /workspace/src/index.js &&
+              exec sleep infinity
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

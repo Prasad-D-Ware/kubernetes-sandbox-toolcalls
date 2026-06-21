@@ -1,0 +1,57 @@
+# One Lease per sandbox pod, pre-created free (no holderIdentity). The API service
+# claims/releases these via optimistic concurrency (ADR-0003). Names match pods.
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: sandbox-runner-0
+  namespace: pi-sandbox
+spec: {}
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: sandbox-runner-1
+  namespace: pi-sandbox
+spec: {}
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: sandbox-runner-2
+  namespace: pi-sandbox
+spec: {}
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: sandbox-runner-3
+  namespace: pi-sandbox
+spec: {}
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: sandbox-runner-4
+  namespace: pi-sandbox
+spec: {}
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: sandbox-runner-5
+  namespace: pi-sandbox
+spec: {}
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: sandbox-runner-6
+  namespace: pi-sandbox
+spec: {}
+---
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: sandbox-runner-7
+  namespace: pi-sandbox
+spec: {}
