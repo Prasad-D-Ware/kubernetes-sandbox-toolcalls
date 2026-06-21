@@ -1,5 +1,6 @@
 import type { LeaseManager } from "../lease/LeaseManager.js";
 import type { LeaseContext } from "../lease/types.js";
+import { type AppLogger, LogEvent } from "../logging.js";
 import { resolveSandboxPath, validateShellCommand, ToolValidationError } from "../tools/allowlist.js";
 import { type Executor, type ToolResult, ToolExecutionTimeoutError } from "./types.js";
 
@@ -10,6 +11,8 @@ export interface SandboxToolRunnerOptions {
   container: string;
   fsRoot: string;
   toolTimeoutMs: number;
+  /** Optional structured logger for tool.execution.* events. */
+  logger?: AppLogger;
 }
 
 export const SANDBOX_TOOL_NAMES = ["shell.run", "fs.read", "env.inspect"] as const;
@@ -72,8 +75,11 @@ export class SandboxToolRunner {
     const timeoutSeconds = Math.max(1, Math.round(this.opts.toolTimeoutMs / 1000));
     const wrappedArgv = ["timeout", `${timeoutSeconds}s`, ...argv];
 
+    const log = this.opts.logger;
+    const logBase = { requestId: ctx.requestId, sessionId: ctx.sessionId, toolCallId: ctx.toolCallId, tool };
     try {
       return await this.opts.leaseManager.withLease(ctx, async (pod) => {
+        log?.info({ event: LogEvent.ToolExecutionStarted, ...logBase, pod }, "tool execution started");
         const exec = await this.opts.executor.exec({
           pod,
           container: this.opts.container,
@@ -82,9 +88,15 @@ export class SandboxToolRunner {
         });
         // `timeout` exits 124 when it kills the command.
         if (exec.timedOut || exec.exitCode === 124) {
+          log?.warn({ event: LogEvent.ToolExecutionTimedOut, ...logBase, pod }, "tool execution timed out");
           return { toolCallId: ctx.toolCallId, tool, pod, status: "timed_out" as const, output: exec.stderr || "tool timed out", errorCode: "tool_execution_timeout" };
         }
         const status = exec.exitCode === 0 ? ("completed" as const) : ("failed" as const);
+        if (status === "completed") {
+          log?.info({ event: LogEvent.ToolExecutionCompleted, ...logBase, pod }, "tool execution completed");
+        } else {
+          log?.warn({ event: LogEvent.ToolExecutionFailed, ...logBase, pod, exitCode: exec.exitCode }, "tool execution failed");
+        }
         return {
           toolCallId: ctx.toolCallId,
           tool,
@@ -96,6 +108,7 @@ export class SandboxToolRunner {
       });
     } catch (err) {
       if (err instanceof ToolExecutionTimeoutError) {
+        log?.warn({ event: LogEvent.ToolExecutionTimedOut, ...logBase }, "tool execution timed out");
         return { toolCallId: ctx.toolCallId, tool, pod: null, status: "timed_out", output: err.message, errorCode: err.code };
       }
       throw err;
