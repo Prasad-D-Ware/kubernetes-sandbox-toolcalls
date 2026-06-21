@@ -45,6 +45,7 @@ export interface AcquiredLease {
   pod: string;
   holderIdentity: string;
   resourceVersion: string;
+  ctx: LeaseContext;
 }
 
 /** Thrown by replaceLease when resourceVersion is stale (HTTP 409 equivalent). */

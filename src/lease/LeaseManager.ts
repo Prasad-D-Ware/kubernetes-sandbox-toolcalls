@@ -12,7 +12,23 @@ interface Waiter {
   resolve: (lease: AcquiredLease) => void;
   reject: (err: Error) => void;
   settled: boolean;
+  waited: boolean;
+  enqueuedAt: number;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * Observability hooks. Decoupled from any logger so the core stays testable;
+ * the composition layer implements this with structured (pino) logging.
+ */
+export interface LeaseEventSink {
+  queueWaitStarted(ctx: LeaseContext): void;
+  queueWaitCompleted(ctx: LeaseContext, info: { pod: string; waitMs: number }): void;
+  queueWaitTimedOut(ctx: LeaseContext, info: { waitMs: number }): void;
+  acquireAttempted(ctx: LeaseContext): void;
+  acquired(ctx: LeaseContext, info: { pod: string; leaseDurationSeconds: number }): void;
+  conflict(ctx: LeaseContext, info: { pod: string }): void;
+  released(ctx: LeaseContext, info: { pod: string }): void;
 }
 
 export interface LeaseManagerOptions {
@@ -23,6 +39,7 @@ export interface LeaseManagerOptions {
   maxQueueWaitMs: number;
   /** Injectable for tests; defaults to Date.now. */
   now?: () => number;
+  events?: Partial<LeaseEventSink>;
 }
 
 export class LeaseManager {
@@ -32,6 +49,7 @@ export class LeaseManager {
   private readonly leaseTtlSeconds: number;
   private readonly maxQueueWaitMs: number;
   private readonly now: () => number;
+  private readonly events: Partial<LeaseEventSink>;
 
   /** Process-local FIFO queue of pending acquisitions (ADR-0004). */
   private readonly waiters: Waiter[] = [];
@@ -48,6 +66,7 @@ export class LeaseManager {
     this.leaseTtlSeconds = opts.leaseTtlSeconds;
     this.maxQueueWaitMs = opts.maxQueueWaitMs;
     this.now = opts.now ?? Date.now;
+    this.events = opts.events ?? {};
   }
 
   private holderIdentity(ctx: LeaseContext): string {
@@ -77,11 +96,14 @@ export class LeaseManager {
         resolve,
         reject,
         settled: false,
+        waited: false,
+        enqueuedAt: this.now(),
         timer: setTimeout(() => {
           if (waiter.settled) return;
           waiter.settled = true;
           const idx = this.waiters.indexOf(waiter);
           if (idx >= 0) this.waiters.splice(idx, 1);
+          this.events.queueWaitTimedOut?.(ctx, { waitMs: this.now() - waiter.enqueuedAt });
           reject(new SandboxCapacityTimeoutError(this.maxQueueWaitMs));
         }, this.maxQueueWaitMs),
       };
@@ -113,7 +135,14 @@ export class LeaseManager {
             continue;
           }
           const claimed = await this.tryClaimAnyPod(waiter.ctx);
-          if (!claimed) break; // no capacity right now; wait for a release or timeout
+          if (!claimed) {
+            // No capacity right now; the head waiter is genuinely queued.
+            if (!waiter.waited) {
+              waiter.waited = true;
+              this.events.queueWaitStarted?.(waiter.ctx);
+            }
+            break; // wait for a release or timeout
+          }
           if (waiter.settled) {
             // Waiter timed out while we were claiming — hand the pod back.
             await this.release(claimed);
@@ -123,6 +152,12 @@ export class LeaseManager {
           waiter.settled = true;
           clearTimeout(waiter.timer);
           this.waiters.shift();
+          if (waiter.waited) {
+            this.events.queueWaitCompleted?.(waiter.ctx, {
+              pod: claimed.pod,
+              waitMs: this.now() - waiter.enqueuedAt,
+            });
+          }
           waiter.resolve(claimed);
         }
       } while (this.pumpAgain && this.waiters.length > 0);
@@ -165,6 +200,7 @@ export class LeaseManager {
         },
         current.resourceVersion,
       );
+      this.events.released?.(lease.ctx, { pod: lease.pod });
     } catch (err) {
       if (!(err instanceof LeaseConflictError)) throw err;
       // someone else changed it; leave it alone
@@ -178,6 +214,7 @@ export class LeaseManager {
   private async tryClaimAnyPod(ctx: LeaseContext): Promise<AcquiredLease | null> {
     const holderIdentity = this.holderIdentity(ctx);
     const now = this.now();
+    this.events.acquireAttempted?.(ctx);
     for (const pod of this.pods) {
       const lease = await this.client.readLease(pod);
       if (!this.isAcquirable(lease, now)) continue; // held and still valid — skip
@@ -193,9 +230,13 @@ export class LeaseManager {
           },
           lease.resourceVersion,
         );
-        return { pod, holderIdentity, resourceVersion: updated.resourceVersion };
+        this.events.acquired?.(ctx, { pod, leaseDurationSeconds: this.leaseTtlSeconds });
+        return { pod, holderIdentity, resourceVersion: updated.resourceVersion, ctx };
       } catch (err) {
-        if (err instanceof LeaseConflictError) continue; // lost the race — try next
+        if (err instanceof LeaseConflictError) {
+          this.events.conflict?.(ctx, { pod });
+          continue; // lost the race — try next
+        }
         throw err;
       }
     }
