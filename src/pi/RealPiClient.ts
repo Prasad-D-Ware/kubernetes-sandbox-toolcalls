@@ -11,6 +11,8 @@ import type { AppConfig } from "../config.js";
 import type { AppLogger } from "../logging.js";
 import { LogEvent } from "../logging.js";
 import type { SandboxToolRunner } from "../sandbox/SandboxToolRunner.js";
+import { SandboxCapacityTimeoutError } from "../lease/types.js";
+import type { ToolResult } from "../sandbox/types.js";
 import type { ChatInput, ChatResult, PiClient, ToolCallMeta } from "./types.js";
 
 /**
@@ -54,18 +56,27 @@ export class RealPiClient implements PiClient {
       tool: string,
       toolCallId: string,
       params: Record<string, unknown>,
-    ) => {
+    ): Promise<ToolResult> => {
       this.logger.info(
         { event: LogEvent.ToolCallRequested, requestId: input.requestId, sessionId: input.sessionId, toolCallId, tool },
         "tool call requested",
       );
-      const result = await this.runner.run(tool, params, {
-        requestId: input.requestId,
-        sessionId: input.sessionId,
-        toolCallId,
-      });
-      collected.push({ toolCallId, tool: result.tool, pod: result.pod, status: result.status });
-      return result;
+      try {
+        const result = await this.runner.run(tool, params, {
+          requestId: input.requestId,
+          sessionId: input.sessionId,
+          toolCallId,
+        });
+        collected.push({ toolCallId, tool: result.tool, pod: result.pod, status: result.status });
+        return result;
+      } catch (err) {
+        // Capacity timeout or unexpected error: record the call and surface a tool
+        // error to the model rather than aborting the whole agent turn.
+        const errorCode = err instanceof SandboxCapacityTimeoutError ? err.code : "tool_execution_error";
+        const message = err instanceof Error ? err.message : String(err);
+        collected.push({ toolCallId, tool, pod: null, status: "failed" });
+        return { toolCallId, tool, pod: null, status: "failed", output: message, errorCode };
+      }
     };
 
     const shellRun = defineTool({
@@ -118,11 +129,28 @@ export class RealPiClient implements PiClient {
       customTools: this.buildTools(input, collected),
     });
 
-    await session.prompt(input.message);
+    const logBase = { requestId: input.requestId, sessionId: input.sessionId };
+    const unsubscribe = session.subscribe((event: { type: string; errorMessage?: string; reason?: string }) => {
+      if (event.type === "error") {
+        this.logger.error(
+          { event: "pi.agent.error", ...logBase, reason: event.reason, errorMessage: event.errorMessage },
+          "pi agent error",
+        );
+      }
+    });
+
+    try {
+      await session.prompt(input.message);
+    } finally {
+      unsubscribe();
+    }
+
+    const message = extractFinalText(session);
+    this.logger.debug({ ...logBase, toolCalls: collected.length, messageLength: message.length }, "pi chat finished");
 
     return {
       sessionId: input.sessionId,
-      message: extractFinalText(session),
+      message,
       toolCalls: collected,
     };
   }

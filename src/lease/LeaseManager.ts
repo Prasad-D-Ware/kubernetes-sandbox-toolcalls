@@ -134,7 +134,18 @@ export class LeaseManager {
             this.waiters.shift();
             continue;
           }
-          const claimed = await this.tryClaimAnyPod(waiter.ctx);
+          let claimed: AcquiredLease | null;
+          try {
+            claimed = await this.tryClaimAnyPod(waiter.ctx);
+          } catch (err) {
+            // Unexpected K8s/API error (not a 409 conflict, which is handled inside
+            // tryClaimAnyPod). Fail this waiter honestly rather than hang to timeout.
+            waiter.settled = true;
+            clearTimeout(waiter.timer);
+            this.waiters.shift();
+            waiter.reject(err instanceof Error ? err : new Error(String(err)));
+            continue;
+          }
           if (!claimed) {
             // No capacity right now; the head waiter is genuinely queued.
             if (!waiter.waited) {
