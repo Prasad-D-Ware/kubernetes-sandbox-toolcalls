@@ -90,7 +90,11 @@ export class RealPiClient implements PiClient {
   }
 
   /** Build the 3 sandbox tools, closing over this request's context + collector. */
-  private buildTools(input: ChatInput, collected: ToolCallMeta[]): ToolDefinition[] {
+  private buildTools(
+    input: ChatInput,
+    collected: ToolCallMeta[],
+    state: { capacityError: SandboxCapacityTimeoutError | null },
+  ): ToolDefinition[] {
     const runTool = async (
       tool: string,
       toolCallId: string,
@@ -109,8 +113,10 @@ export class RealPiClient implements PiClient {
         collected.push({ toolCallId, tool: result.tool, pod: result.pod, status: result.status });
         return result;
       } catch (err) {
-        // Capacity timeout or unexpected error: record the call and surface a tool
-        // error to the model rather than aborting the whole agent turn.
+        // Record the failed call and feed the error back to the model so the agent
+        // loop finishes cleanly. A capacity timeout is additionally remembered so
+        // runChat can surface the documented sandbox_capacity_timeout at the API level.
+        if (err instanceof SandboxCapacityTimeoutError) state.capacityError = err;
         const errorCode = err instanceof SandboxCapacityTimeoutError ? err.code : "tool_execution_error";
         const message = err instanceof Error ? err.message : String(err);
         collected.push({ toolCallId, tool, pod: null, status: "failed" });
@@ -141,6 +147,7 @@ export class RealPiClient implements PiClient {
 
   async runChat(input: ChatInput): Promise<ChatResult> {
     const collected: ToolCallMeta[] = [];
+    const state: { capacityError: SandboxCapacityTimeoutError | null } = { capacityError: null };
     const { session } = await createAgentSession({
       model: this.resolveModel(),
       authStorage: this.authStorage,
@@ -148,7 +155,7 @@ export class RealPiClient implements PiClient {
       sessionManager: SessionManager.inMemory(),
       // Only our sandbox tools — no local filesystem/bash built-ins.
       noTools: "builtin",
-      customTools: this.buildTools(input, collected),
+      customTools: this.buildTools(input, collected, state),
     });
 
     const logBase = { requestId: input.requestId, sessionId: input.sessionId };
@@ -166,6 +173,11 @@ export class RealPiClient implements PiClient {
     } finally {
       unsubscribe();
     }
+
+    // If any tool call exhausted sandbox capacity, surface the documented
+    // sandbox_capacity_timeout at the API level (HTTP 503) rather than as a
+    // normal chat reply.
+    if (state.capacityError) throw state.capacityError;
 
     const message = extractFinalText(session);
     this.logger.debug({ ...logBase, toolCalls: collected.length, messageLength: message.length }, "pi chat finished");

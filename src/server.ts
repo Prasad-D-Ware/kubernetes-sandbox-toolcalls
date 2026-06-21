@@ -65,6 +65,7 @@ async function main() {
     fsRoot: config.fsRoot,
     toolTimeoutMs: config.toolTimeoutMs,
     logger,
+    demoHoldMs: config.demoToolHoldMs,
   });
 
   const piClient = new RealPiClient(config, runner, logger);

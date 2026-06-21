@@ -17,6 +17,10 @@ export interface AppConfig {
   toolTimeoutMs: number;
   leaseTtlSeconds: number;
 
+  /** Demo-only: artificially hold each lease this many ms after exec, to make the
+   * FIFO queue / capacity-timeout observable live with fast tools. Default 0. */
+  demoToolHoldMs: number;
+
   fsRoot: string;
 
   /** Resolved provider API key for the Pi SDK. */
@@ -80,6 +84,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     maxQueueWaitMs: num("MAX_QUEUE_WAIT_SECONDS", env.MAX_QUEUE_WAIT_SECONDS, 15) * 1000,
     toolTimeoutMs: num("TOOL_EXECUTION_TIMEOUT_SECONDS", env.TOOL_EXECUTION_TIMEOUT_SECONDS, 30) * 1000,
     leaseTtlSeconds: num("LEASE_TTL_SECONDS", env.LEASE_TTL_SECONDS, 45),
+
+    demoToolHoldMs: num("DEMO_TOOL_HOLD_MS", env.DEMO_TOOL_HOLD_MS, 0),
 
     fsRoot: env.SANDBOX_FS_ROOT ?? "/workspace",
 

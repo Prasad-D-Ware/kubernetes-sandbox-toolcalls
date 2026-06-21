@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { SandboxToolRunner } from "../../src/sandbox/SandboxToolRunner.js";
 import { LeaseManager } from "../../src/lease/LeaseManager.js";
 import { ToolExecutionTimeoutError } from "../../src/sandbox/types.js";
@@ -7,7 +7,7 @@ import { FakeExecutor } from "../support/fakeExecutor.js";
 
 const POOL = ["sandbox-runner-0", "sandbox-runner-1"];
 
-function setup(executor: FakeExecutor) {
+function setup(executor: FakeExecutor, opts: { demoHoldMs?: number } = {}) {
   const client = new FakeLeaseClient(POOL);
   const leaseManager = new LeaseManager({
     client,
@@ -23,6 +23,7 @@ function setup(executor: FakeExecutor) {
     container: "runner",
     fsRoot: "/workspace",
     toolTimeoutMs: 30_000,
+    demoHoldMs: opts.demoHoldMs,
   });
   return { client, runner };
 }
@@ -84,5 +85,27 @@ describe("SandboxToolRunner", () => {
     const bad = await runner.run("fs.read", { path: "../etc/passwd" }, ctx);
     expect(bad.status).toBe("failed");
     expect(bad.errorCode).toBe("tool_input_rejected");
+  });
+
+  it("keeps the pod leased during demoHoldMs, then releases", async () => {
+    vi.useFakeTimers();
+    try {
+      const executor = FakeExecutor.ok("done");
+      const { client, runner } = setup(executor, { demoHoldMs: 1_000 });
+
+      const p = runner.run("shell.run", { command: "ls" }, ctx);
+      // Let the exec resolve, but not the hold timer.
+      await vi.advanceTimersByTimeAsync(0);
+      const duringHold = await client.listLeases();
+      expect(duringHold.some((l) => l.holderIdentity !== null)).toBe(true); // still held
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await p;
+      expect(result.status).toBe("completed");
+      const afterRelease = await client.listLeases();
+      expect(afterRelease.every((l) => l.holderIdentity === null)).toBe(true); // released
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

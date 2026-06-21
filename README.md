@@ -263,20 +263,36 @@ kubectl -n pi-sandbox create secret generic pi-credentials \
 ## 9 concurrent tool calls example
 
 With 8 pods, the 9th concurrent tool call must queue, then either acquire a freed pod or
-time out. Start the API, then:
+time out.
+
+The real tools (`ls`, `pwd`, …) run in ~30ms, so 8 pods absorb 9 staggered calls without
+ever queueing. To make the queue and capacity timeout **observable live**, set
+`DEMO_TOOL_HOLD_MS` (demo-only — holds each lease N ms after the tool runs; default 0):
 
 ```bash
+# terminal 1: hold each lease 3s so 8 pods saturate
+DEMO_TOOL_HOLD_MS=3000 npm run dev
+
+# terminal 2: fire 9 concurrent tool-calling chats
 bash scripts/demo-9-concurrent.sh
-# request 1 -> HTTP 200 ... "status":"completed" ...
-# ...
-# request 9 -> HTTP 200 (acquired a freed pod)  OR
-# request 9 -> HTTP 503 {"error":{"code":"sandbox_capacity_timeout", ...}}
 ```
 
-Watch the pool transition while it runs:
+Now the logs show the 9th request queueing — `queue.wait.started` → `queue.wait.completed`
+once a pod frees. Push it further (e.g. `DEMO_TOOL_HOLD_MS=20000`, which exceeds the 15s max
+wait) and the later requests return the capacity timeout:
+
+```json
+{ "error": { "code": "sandbox_capacity_timeout", "message": "No sandbox pod became available within 15 seconds." } }
+```
+
+The deterministic proof of all three queue behaviors (queueing, FIFO hand-off on free, and
+capacity timeout) lives in `test/lease/queue.test.ts` and runs in `npm test` with no cluster.
+
+Watch the pool transition while it runs (macOS has no `watch`; use a loop):
 
 ```bash
-watch -n0.3 'curl -s http://localhost:3000/pods | jq -c ".pods[] | {name, status: .lease.status}"'
+while true; do clear; curl -s http://localhost:3000/pods \
+  | jq -c '.pods[] | {name, status: .lease.status}'; sleep 0.3; done
 ```
 
 ## Tool execution: pods/exec vs in-pod runner

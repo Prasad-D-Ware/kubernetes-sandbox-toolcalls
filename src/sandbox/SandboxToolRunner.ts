@@ -13,7 +13,12 @@ export interface SandboxToolRunnerOptions {
   toolTimeoutMs: number;
   /** Optional structured logger for tool.execution.* events. */
   logger?: AppLogger;
+  /** Demo-only: hold the lease this many ms after exec, to make the FIFO queue /
+   * capacity timeout observable live with fast tools. Default 0. */
+  demoHoldMs?: number;
 }
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export const SANDBOX_TOOL_NAMES = ["shell.run", "fs.read", "env.inspect"] as const;
 export type SandboxToolName = (typeof SANDBOX_TOOL_NAMES)[number];
@@ -86,6 +91,10 @@ export class SandboxToolRunner {
           argv: wrappedArgv,
           timeoutMs: this.opts.toolTimeoutMs,
         });
+        // Demo-only artificial hold so fast tools can still saturate the pool.
+        if (this.opts.demoHoldMs && this.opts.demoHoldMs > 0) {
+          await delay(this.opts.demoHoldMs);
+        }
         // `timeout` exits 124 when it kills the command.
         if (exec.timedOut || exec.exitCode === 124) {
           log?.warn({ event: LogEvent.ToolExecutionTimedOut, ...logBase, pod }, "tool execution timed out");
