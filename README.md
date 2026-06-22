@@ -5,7 +5,7 @@
 A guided tour of the architecture, the live ops dashboard, and the lease / queue /
 capacity-timeout behavior working end-to-end.
 
-[![Watch the demo on Loom](https://img.shields.io/badge/%E2%96%B6_Watch_the_demo-Loom-625DF5?style=for-the-badge&logo=loom&logoColor=white)](https://www.loom.com/share/c4ed6f8e1d6346a2beee84f5412a09b5)
+[![Watch the demo on Loom](https://img.shields.io/badge/%E2%96%B6_Watch_the_demo-Loom-625DF5?style=for-the-badge&logo=loom&logoColor=white)](https://www.loom.com/share/372b97f6a5804dbebff37eb931230aa8)
 
 A TypeScript backend that runs a chat agent on the **real Pi TypeScript SDK**
 (`@earendil-works/pi-coding-agent`). The agent replies normally, but whenever the LLM
