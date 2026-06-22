@@ -9,3 +9,8 @@ coverage/
 
 # Internal design scaffolding — not part of the evaluator deliverable
 docs/
+
+# Design-context scaffolding (impeccable) — not part of the evaluator deliverable
+PRODUCT.md
+DESIGN.md
+.impeccable/

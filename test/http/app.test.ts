@@ -4,6 +4,8 @@ import type { Server } from "node:http";
 import { createApp, type HealthChecker } from "../../src/http/app.js";
 import { createLogger } from "../../src/logging.js";
 import { SandboxCapacityTimeoutError } from "../../src/lease/types.js";
+import { EventBus } from "../../src/dashboard/EventBus.js";
+import { MetricsStore } from "../../src/dashboard/MetricsStore.js";
 import type { PiClient, ChatInput } from "../../src/pi/types.js";
 
 const logger = createLogger("silent");
@@ -14,6 +16,9 @@ function startApp(piClient: PiClient, podsState: unknown, health: HealthChecker)
     poolStateReader: { read: async () => podsState } as never,
     healthChecker: health,
     logger,
+    eventBus: new EventBus(),
+    metricsStore: new MetricsStore(["sandbox-runner-0", "sandbox-runner-1"]),
+    runtimeControls: { demoHoldMs: 0 },
   });
   const server = app.listen(0);
   const { port } = server.address() as AddressInfo;
@@ -24,8 +29,10 @@ describe("HTTP API", () => {
   let server: Server;
   let base: string;
 
+  let chatRuns = 0;
   const piClient: PiClient = {
     async runChat(input: ChatInput) {
+      chatRuns += 1;
       if (input.message === "boom") throw new SandboxCapacityTimeoutError(15_000);
       return {
         sessionId: input.sessionId,
@@ -92,5 +99,35 @@ describe("HTTP API", () => {
     const res = await fetch(`${base}/health`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, kubernetes: "connected", sandboxPodsReady: 8 });
+  });
+
+  it("GET /metrics returns the dashboard snapshot shape", async () => {
+    const res = await fetch(`${base}/metrics`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.pods.map((p: { name: string }) => p.name)).toEqual(["sandbox-runner-0", "sandbox-runner-1"]);
+    expect(body.counters.toolCalls).toMatchObject({ total: 0 });
+    expect(Array.isArray(body.recentToolCalls)).toBe(true);
+  });
+
+  it("GET /events responds with an SSE stream", async () => {
+    const res = await fetch(`${base}/events`, { headers: { accept: "text/event-stream" } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    await res.body?.cancel(); // close the stream so the test can finish
+  });
+
+  it("POST /demo/run launches N background chats and accepts a hold", async () => {
+    const before = chatRuns;
+    const res = await fetch(`${base}/demo/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ count: 3, holdMs: 2000 }),
+    });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ launched: 3, holdMs: 2000 });
+    // allow the fire-and-forget chats to be invoked
+    await new Promise((r) => setTimeout(r, 10));
+    expect(chatRuns - before).toBe(3);
   });
 });

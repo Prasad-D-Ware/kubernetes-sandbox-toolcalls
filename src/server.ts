@@ -1,4 +1,6 @@
 import "dotenv/config"; // load .env into process.env before anything reads config
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CoordinationV1Api,
   CoreV1Api,
@@ -7,6 +9,9 @@ import {
 } from "@kubernetes/client-node";
 import { loadConfig, MissingCredentialsError } from "./config.js";
 import { createLogger } from "./logging.js";
+import { EventBus } from "./dashboard/EventBus.js";
+import { MetricsStore } from "./dashboard/MetricsStore.js";
+import { createRuntimeControls } from "./runtimeControls.js";
 import { LeaseManager } from "./lease/LeaseManager.js";
 import { makeLeaseEventSink } from "./leaseEventSink.js";
 import { K8sLeaseClient } from "./kube/KubeLeaseClient.js";
@@ -31,7 +36,13 @@ async function main() {
     }
   })();
 
-  const logger = createLogger(config.logLevel);
+  // Ops dashboard: tap the structured logs into a bus that feeds the live SSE
+  // stream and the in-memory metrics store (no changes to any emit site).
+  const eventBus = new EventBus();
+  const logger = createLogger(config.logLevel, (e) => eventBus.publish(e));
+  const metricsStore = new MetricsStore(config.podNames);
+  eventBus.subscribe((e) => metricsStore.apply(e));
+  const runtimeControls = createRuntimeControls(config.demoToolHoldMs);
 
   // Kubernetes clients (in-cluster when running in a pod, else local kubeconfig).
   const kc = new KubeConfig();
@@ -65,7 +76,7 @@ async function main() {
     fsRoot: config.fsRoot,
     toolTimeoutMs: config.toolTimeoutMs,
     logger,
-    demoHoldMs: config.demoToolHoldMs,
+    demoHoldMs: () => runtimeControls.demoHoldMs,
   });
 
   const piClient = new RealPiClient(config, runner, logger);
@@ -99,10 +110,14 @@ async function main() {
     },
   };
 
-  const app = createApp({ piClient, poolStateReader, healthChecker, logger });
+  // public/ sits at the project root; resolve relative to this module so it works
+  // under both `npm run dev` (src) and `npm start` (dist).
+  const publicDir = path.resolve(fileURLToPath(import.meta.url), "../../public");
+
+  const app = createApp({ piClient, poolStateReader, healthChecker, logger, eventBus, metricsStore, runtimeControls, publicDir });
   app.listen(config.port, () => {
     logger.info(
-      { event: "server.started", port: config.port, namespace: config.namespace, poolSize: config.poolSize, provider: config.provider, model: config.model },
+      { event: "server.started", port: config.port, namespace: config.namespace, poolSize: config.poolSize, provider: config.provider, model: config.model, dashboard: `http://localhost:${config.port}/` },
       `pi-sandbox-service listening on :${config.port}`,
     );
   });

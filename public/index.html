@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pi Sandbox · Ops</title>
+<style>
+  /* ── Console palette (OKLCH): cool-graphite surface, telemetry signal colors ── */
+  :root {
+    --bg: oklch(0.145 0.012 255);
+    --surface: oklch(0.178 0.014 255);
+    --surface-2: oklch(0.212 0.016 255);
+    --inset: oklch(0.16 0.013 255);
+    --line: oklch(0.30 0.018 255);
+    --line-2: oklch(0.40 0.02 255);
+    --ink: oklch(0.95 0.008 255);
+    --ink-2: oklch(0.82 0.012 255);
+    --muted: oklch(0.68 0.015 258);
+    /* signal vocabulary — read like indicator lamps on the console */
+    --leased: oklch(0.82 0.14 75);     /* amber  — pod held */
+    --ok: oklch(0.80 0.15 152);        /* green  — completed / healthy */
+    --alert: oklch(0.70 0.19 25);      /* red    — failed / timeout */
+    --queue: oklch(0.74 0.15 300);     /* violet — waiting in queue */
+    --info: oklch(0.74 0.12 248);      /* cyan-indigo — acquire / info */
+    --accent: oklch(0.62 0.15 256);    /* interactive: buttons / focus / selection */
+    --accent-ink: oklch(0.97 0.01 256);
+    --leased-dim: oklch(0.82 0.14 75 / 0.14);
+    --ok-dim: oklch(0.80 0.15 152 / 0.14);
+    --alert-dim: oklch(0.70 0.19 25 / 0.16);
+    --queue-dim: oklch(0.74 0.15 300 / 0.16);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --r: 9px; --r-sm: 6px;
+    --z-sticky: 100; --z-inspector: 300; --z-toast: 400;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+  ::selection { background: oklch(0.62 0.15 256 / 0.4); }
+  /* scrollbars — subtle, console-native (not flashy) */
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .mono { font-family: var(--mono); }
+  .label { font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted); }
+
+  /* ── Command bar ─────────────────────────────────────────────────────────── */
+  header { display: flex; align-items: center; gap: 18px; height: 52px; padding: 0 16px;
+    background: linear-gradient(180deg, var(--surface), var(--inset));
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: var(--z-sticky); }
+  .brand { display: flex; align-items: center; gap: 9px; font-family: var(--mono);
+    font-size: 13px; font-weight: 600; letter-spacing: .04em; color: var(--ink); }
+  .brand .mark { width: 18px; height: 18px; border-radius: 5px;
+    background: radial-gradient(circle at 30% 30%, var(--leased), oklch(0.5 0.12 40));
+    box-shadow: 0 0 10px oklch(0.82 0.14 75 / 0.5); flex: none; }
+  .config { display: flex; gap: 14px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .config b { color: var(--ink-2); font-weight: 600; }
+  .spacer { flex: 1; }
+  .conn { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .lamp { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none;
+    transition: background .2s, box-shadow .2s; }
+  .lamp.live { background: var(--ok); box-shadow: 0 0 9px var(--ok); }
+  .lamp.dead { background: var(--alert); box-shadow: 0 0 9px var(--alert); }
+
+  /* ── Launch deck (drive the demo from the UI) ───────────────────────────── */
+  .deck { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: var(--r);
+    background: var(--inset); border: 1px solid var(--line); }
+  .field { display: flex; align-items: center; gap: 6px; }
+  .field > .label { font-size: 9px; }
+  .stepper { display: flex; align-items: center; background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: var(--r-sm); }
+  .stepper button { width: 22px; height: 24px; border: 0; background: transparent; color: var(--ink-2);
+    font-size: 14px; cursor: pointer; line-height: 1; }
+  .stepper button:hover { color: var(--accent-ink); background: oklch(0.62 0.15 256 / 0.25); }
+  .stepper input { width: 30px; text-align: center; background: transparent; border: 0; color: var(--ink);
+    font-family: var(--mono); font-size: 12px; -moz-appearance: textfield; }
+  .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; }
+  select.hold { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: var(--r-sm); height: 26px; font-family: var(--mono); font-size: 11px; padding: 0 6px; }
+  .btn { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .03em;
+    border-radius: var(--r-sm); padding: 6px 11px; cursor: pointer; border: 1px solid var(--line);
+    background: var(--surface-2); color: var(--ink-2); transition: all .15s var(--ease); }
+  .btn:hover { border-color: var(--line-2); color: var(--ink); }
+  .btn:focus-visible, .tile:focus-visible, input:focus-visible, select:focus-visible, .chip:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn.launch { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn.launch:hover { background: oklch(0.67 0.16 256); }
+  .btn.launch:active { transform: translateY(1px); }
+
+  /* ── Layout grid ────────────────────────────────────────────────────────── */
+  main { display: grid; grid-template-columns: 1.05fr 0.95fr;
+    grid-template-rows: auto minmax(0, 1fr) minmax(0, 0.92fr);
+    gap: 12px; padding: 12px; height: calc(100vh - 52px); overflow: hidden; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+    min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  .panel > .head { display: flex; align-items: center; gap: 10px; padding: 9px 13px;
+    border-bottom: 1px solid var(--line); }
+  .panel > .head .title { font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-2); }
+  .panel > .head .spacer { flex: 1; }
+  .panel > .body { flex: 1; min-height: 0; overflow: auto; padding: 12px 13px; }
+
+  /* ① Pool */
+  .pool { grid-column: 1 / 3; }
+  .pool > .body { overflow: visible; padding: 13px; }
+  .tiles { display: grid; grid-template-columns: repeat(8, 1fr); gap: 9px; }
+  .tile { text-align: left; background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 10px 11px; cursor: pointer; position: relative;
+    font: inherit; color: inherit; transition: border-color .2s, box-shadow .25s var(--ease), transform .15s; }
+  .tile:hover { border-color: var(--line-2); transform: translateY(-1px); }
+  .tile .top { display: flex; align-items: center; justify-content: space-between; }
+  .tile .pod { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .tile .badge { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono);
+    font-size: 10px; font-weight: 600; letter-spacing: .05em; color: var(--muted); }
+  .tile .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-2);
+    transition: background .25s, box-shadow .25s; }
+  .tile .holder { font-family: var(--mono); font-size: 11px; color: var(--ink); margin-top: 9px;
+    min-height: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .sub { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .tile .foot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+  .tile .calls { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .tile .ttl { font-family: var(--mono); font-size: 10px; color: var(--leased); }
+  .tile.leased { border-color: oklch(0.82 0.14 75 / 0.6);
+    box-shadow: 0 0 0 1px oklch(0.82 0.14 75 / 0.4), 0 0 22px var(--leased-dim);
+    background: linear-gradient(180deg, var(--leased-dim), var(--surface-2)); }
+  .tile.leased .badge { color: var(--leased); }
+  .tile.leased .badge .dot { background: var(--leased); box-shadow: 0 0 8px var(--leased); }
+
+  /* ② Metrics — instrument readouts, not cards */
+  .metrics > .body { display: flex; flex-direction: column; gap: 14px; }
+  .util { }
+  .util .util-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 7px; }
+  .util .big { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--ink); }
+  .util .big span { font-size: 13px; color: var(--muted); font-weight: 400; }
+  .segbar { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; }
+  .seg { height: 10px; border-radius: 3px; background: var(--inset); border: 1px solid var(--line);
+    transition: background .25s var(--ease), box-shadow .25s; }
+  .seg.on { background: var(--leased); border-color: var(--leased); box-shadow: 0 0 9px var(--leased-dim); }
+  .readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line);
+    border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; }
+  .ro { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    padding: 8px 11px; background: var(--surface); }
+  .ro .k { font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--muted); }
+  .ro .v { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--ink); }
+  .ro .v small { font-size: 10px; color: var(--muted); font-weight: 400; }
+  .v .ok { color: var(--ok); } .v .bad { color: var(--alert); } .v .warn { color: var(--leased); }
+  .spark-wrap { margin-top: 2px; }
+  canvas#spark { width: 100%; height: 52px; display: block; }
+
+  /* ③ Event feed */
+  .filters { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .chip { font-family: var(--mono); font-size: 10px; letter-spacing: .03em; padding: 3px 9px;
+    border-radius: 20px; border: 1px solid var(--line); background: var(--surface-2);
+    color: var(--muted); cursor: pointer; transition: all .15s; }
+  .chip:hover { color: var(--ink-2); border-color: var(--line-2); }
+  .chip.on { background: oklch(0.62 0.15 256 / 0.22); border-color: var(--accent); color: var(--accent-ink); }
+  input.search { background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-sm);
+    color: var(--ink); font-family: var(--mono); font-size: 11px; padding: 4px 8px; width: 120px; }
+  input.search::placeholder { color: var(--muted); }
+  .feed { font-family: var(--mono); font-size: 11px; }
+  .feed .row { display: flex; gap: 9px; padding: 2.5px 0; border-bottom: 1px solid oklch(0.30 0.018 255 / 0.4);
+    white-space: nowrap; }
+  .feed .row .t { color: var(--muted); flex: none; }
+  .feed .row .ev { flex: none; }
+  .feed .row .meta { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+  .ev-acq { color: var(--info); } .ev-ok { color: var(--ok); } .ev-bad { color: var(--alert); }
+  .ev-q { color: var(--queue); } .ev-dim { color: var(--muted); }
+
+  /* ④ Tool call → pod table */
+  .tcp { grid-column: 1 / 3; }
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px; }
+  thead th { text-align: left; color: var(--muted); font-weight: 500; padding: 5px 11px; letter-spacing: .04em;
+    position: sticky; top: 0; background: var(--surface); border-bottom: 1px solid var(--line); z-index: 1; }
+  tbody td { padding: 5px 11px; border-bottom: 1px solid oklch(0.30 0.018 255 / 0.35); }
+  tbody tr.call { cursor: pointer; transition: background .12s; }
+  tbody tr.call:hover { background: var(--surface-2); }
+  td .st { display: inline-flex; align-items: center; gap: 6px; }
+  td .st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  tr.completed td .st { color: var(--ok); } tr.completed td .st::before { background: var(--ok); }
+  tr.failed td .st { color: var(--alert); } tr.failed td .st::before { background: var(--alert); }
+  tr.timed_out td .st, tr.capacity_timeout td .st { color: var(--leased); }
+  tr.timed_out td .st::before, tr.capacity_timeout td .st::before { background: var(--leased); }
+  td.pod .pill { color: var(--info); }
+  td.detail { color: var(--ink-2); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .expand td { background: var(--inset); padding: 0; }
+  .expand .inner { padding: 11px 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 9px 22px; }
+  .kv { display: flex; flex-direction: column; gap: 2px; }
+  .kv .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .kv .v { font-family: var(--mono); font-size: 12px; color: var(--ink); word-break: break-all; }
+
+  /* empty states that teach */
+  .empty { color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 10px 2px; }
+
+  /* pod inspector — inline slide-in panel (not a modal) */
+  .inspector { position: fixed; top: 52px; right: 0; bottom: 0; width: 380px; max-width: 92vw;
+    background: var(--surface); border-left: 1px solid var(--line-2); z-index: var(--z-inspector);
+    transform: translateX(100%); transition: transform .25s var(--ease); display: flex; flex-direction: column;
+    box-shadow: -16px 0 40px oklch(0 0 0 / 0.35); }
+  .inspector.open { transform: translateX(0); }
+  .inspector .ihead { display: flex; align-items: center; gap: 10px; padding: 13px 15px; border-bottom: 1px solid var(--line); }
+  .inspector .ihead .pod { font-family: var(--mono); font-size: 15px; font-weight: 600; }
+  .inspector .ihead .x { margin-left: auto; cursor: pointer; color: var(--muted); background: transparent;
+    border: 0; font-size: 18px; line-height: 1; }
+  .inspector .ihead .x:hover { color: var(--ink); }
+  .inspector .ibody { flex: 1; overflow: auto; padding: 14px 15px; }
+  .istat { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 9px; margin-bottom: 16px; }
+  .istat .box { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 9px 10px; }
+  .istat .box .k { font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; color: var(--muted); letter-spacing: .04em; }
+  .istat .box .v { font-family: var(--mono); font-size: 17px; font-weight: 600; margin-top: 3px; }
+  .ilist .row { display: flex; gap: 9px; padding: 6px 0; border-bottom: 1px solid oklch(0.30 0.018 255 / 0.4);
+    font-family: var(--mono); font-size: 11px; }
+  .ilist .row .t { color: var(--muted); }
+
+  /* toast */
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--accent); color: var(--accent-ink); font-family: var(--mono); font-size: 12px;
+    padding: 9px 16px; border-radius: 20px; z-index: var(--z-toast); opacity: 0;
+    transition: opacity .2s, transform .25s var(--ease); pointer-events: none;
+    box-shadow: 0 8px 26px oklch(0.62 0.15 256 / 0.4); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+    .inspector { transition: none; } .toast { transition: opacity .15s; }
+  }
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr; grid-template-rows: auto auto auto 1fr; height: auto; overflow: visible; }
+    .pool, .tcp { grid-column: 1; } .tiles { grid-template-columns: repeat(4, 1fr); }
+    body { height: auto; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="mark"></span>PI·SANDBOX <span style="color:var(--muted);font-weight:400">/ ops</span></div>
+  <div class="config">
+    <span>pool <b>8</b></span><span>queue <b>15s</b></span><span>tool <b>30s</b></span><span>lease-ttl <b>45s</b></span>
+  </div>
+  <span class="spacer"></span>
+  <div class="deck" role="group" aria-label="Launch demo load">
+    <div class="field"><span class="label">conc</span>
+      <div class="stepper">
+        <button id="conc-dn" aria-label="fewer">–</button>
+        <input id="conc" type="number" value="9" min="1" max="50" aria-label="concurrency" />
+        <button id="conc-up" aria-label="more">+</button>
+      </div>
+    </div>
+    <div class="field"><span class="label">hold</span>
+      <select id="hold" class="hold" aria-label="lease hold">
+        <option value="0">0 (real)</option>
+        <option value="1500">1.5s</option>
+        <option value="3000" selected>3s</option>
+        <option value="8000">8s</option>
+        <option value="20000">20s (timeout)</option>
+      </select>
+    </div>
+    <button id="launch" class="btn launch">▶ launch burst</button>
+  </div>
+  <div class="conn"><span class="lamp" id="lamp"></span><span id="conn-text">connecting…</span></div>
+</header>
+
+<main>
+  <section class="panel pool">
+    <div class="head"><span class="title">Sandbox Pool</span><span class="spacer"></span>
+      <span class="label" id="pool-sub">click a pod to inspect</span></div>
+    <div class="body"><div class="tiles" id="tiles"></div></div>
+  </section>
+
+  <section class="panel metrics">
+    <div class="head"><span class="title">Telemetry</span></div>
+    <div class="body">
+      <div class="util">
+        <div class="util-head"><span class="label">utilization</span><span class="big" id="util-big">0<span>/8</span></span></div>
+        <div class="segbar" id="segbar"></div>
+      </div>
+      <div class="readouts" id="readouts"></div>
+      <div class="spark-wrap"><span class="label">utilization · last samples</span><canvas id="spark" width="600" height="52"></canvas></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <span class="title">Event Feed</span><span class="spacer"></span>
+      <div class="filters">
+        <button class="chip on" data-f="all">all</button>
+        <button class="chip" data-f="lease">lease</button>
+        <button class="chip" data-f="tool">tool</button>
+        <button class="chip" data-f="queue">queue</button>
+        <button class="chip" data-f="err">errors</button>
+        <button class="btn" id="pause" style="padding:3px 9px">⏸</button>
+      </div>
+    </div>
+    <div class="body"><div class="feed" id="feed"></div></div>
+  </section>
+
+  <section class="panel tcp">
+    <div class="head">
+      <span class="title">Tool Call → Pod</span><span class="spacer"></span>
+      <input class="search" id="tsearch" placeholder="filter session/pod/status…" aria-label="filter table" />
+    </div>
+    <div class="body" style="padding:0">
+      <table>
+        <thead><tr><th>time</th><th>session</th><th>tool</th><th>command</th><th>pod</th><th>status</th><th>wait</th><th>ms</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty" id="tcp-empty" style="padding:14px">No tool calls yet — hit <b>launch burst</b> to assign work across the pool.</div>
+    </div>
+  </section>
+</main>
+
+<aside class="inspector" id="inspector" aria-hidden="true">
+  <div class="ihead"><span class="pod" id="ins-pod">—</span><span class="label" id="ins-state"></span>
+    <button class="x" id="ins-close" aria-label="close">✕</button></div>
+  <div class="ibody" id="ins-body"></div>
+</aside>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const shortPod = (p) => p ? p.replace("sandbox-runner-", "rnr-") : "—";
+const hhmmss = (iso) => { try { return new Date(iso).toLocaleTimeString("en-GB"); } catch { return ""; } };
+const ms = (n) => n == null ? "" : (n >= 1000 ? (n / 1000).toFixed(1) + "s" : n + "ms");
+
+let metrics = { pods: [], counters: null, latency: {}, recentToolCalls: [], utilization: [] };
+let events = [];                 // raw event ring for the feed
+let feedFilter = "all", tableQuery = "", paused = false;
+let selectedPod = null, expanded = new Set();
+
+// ── Event feed ──────────────────────────────────────────────────────────────
+const FAMILY = (ev) =>
+  ev.startsWith("sandbox.lease") ? "lease" :
+  ev.startsWith("tool.") ? "tool" :
+  ev.startsWith("queue.") ? "queue" :
+  ev.startsWith("chat.") ? "chat" : "other";
+const IS_ERR = (ev) => /failed|timed_out|conflict/.test(ev);
+const EV_CLASS = (ev) =>
+  ev === "sandbox.lease.acquired" || ev === "queue.wait.completed" ? "ev-acq" :
+  ev === "tool.execution.completed" ? "ev-ok" :
+  IS_ERR(ev) ? "ev-bad" :
+  ev.startsWith("queue.") ? "ev-q" : "ev-dim";
+
+function matchFeed(e) {
+  if (feedFilter === "all") return true;
+  if (feedFilter === "err") return IS_ERR(e.event);
+  return FAMILY(e.event) === feedFilter;
+}
+function renderFeed() {
+  const feed = $("feed");
+  const rows = events.filter(matchFeed).slice(0, 200);
+  if (!rows.length) { feed.innerHTML = '<div class="empty">Waiting for events…</div>'; return; }
+  feed.innerHTML = rows.map((e) => {
+    const bits = [];
+    if (e.pod) bits.push(shortPod(e.pod));
+    if (e.sessionId) bits.push(e.sessionId);
+    if (e.detail) bits.push("`" + e.detail + "`");
+    if (typeof e.waitMs === "number") bits.push(ms(e.waitMs));
+    if (e.code) bits.push(e.code);
+    return `<div class="row"><span class="t">${hhmmss(e.time)}</span><span class="ev ${EV_CLASS(e.event)}">${e.event}</span><span class="meta">${bits.join("  ")}</span></div>`;
+  }).join("");
+}
+
+// ── Pool tiles ───────────────────────────────────────────────────────────────
+function renderPods() {
+  const tiles = $("tiles");
+  tiles.innerHTML = "";
+  for (const p of metrics.pods) {
+    const leased = p.status === "leased";
+    const ttl = p.expiresAt ? Math.max(0, Math.round((new Date(p.expiresAt) - Date.now()) / 1000)) : null;
+    const el = document.createElement("button");
+    el.className = "tile" + (leased ? " leased" : "");
+    el.setAttribute("aria-label", `${p.name} ${p.status}, ${p.callsServed} calls`);
+    el.innerHTML = `
+      <div class="top"><span class="pod">${shortPod(p.name)}</span>
+        <span class="badge"><span class="dot"></span>${leased ? "LEASED" : "FREE"}</span></div>
+      <div class="holder">${leased ? (p.session || "") : '<span class="sub">idle</span>'}</div>
+      <div class="foot">
+        <span class="ttl">${leased && ttl != null ? "ttl " + ttl + "s" : ""}</span>
+        <span class="calls">${p.callsServed}× served</span></div>`;
+    el.onclick = () => openInspector(p.name);
+    tiles.appendChild(el);
+  }
+}
+
+// ── Telemetry readouts ────────────────────────────────────────────────────────
+function renderMetrics() {
+  const c = metrics.counters; if (!c) return;
+  const busy = metrics.pods.filter((p) => p.status === "leased").length, n = metrics.pods.length || 8;
+  $("util-big").innerHTML = `${busy}<span>/${n}</span>`;
+  $("segbar").innerHTML = Array.from({ length: n }, (_, i) => `<div class="seg${i < busy ? " on" : ""}"></div>`).join("");
+  const ro = (k, v, sub) => `<div class="ro"><span class="k">${k}</span><span class="v">${v}${sub ? ` <small>${sub}</small>` : ""}</span></div>`;
+  $("readouts").innerHTML = [
+    ro("tool calls", c.toolCalls.total, `<span class="ok">${c.toolCalls.completed}✓</span> <span class="bad">${c.toolCalls.failed}✕</span>`),
+    ro("queue depth", c.queue.depth, `${c.queue.waitsStarted} waits`),
+    ro("capacity t/o", `<span class="${c.queue.timeouts ? "bad" : "ok"}">${c.queue.timeouts}</span>`, `${c.queue.waitsCompleted} served`),
+    ro("exec p95", metrics.latency.execMsP95 + "ms", `avg ${metrics.latency.execMsAvg}`),
+    ro("queue wait", metrics.latency.queueWaitMsAvg + "ms", "avg"),
+    ro("lease 409s", c.leases.conflicts, `${c.leases.acquired} acq`),
+  ].join("");
+  renderSpark();
+}
+function renderSpark() {
+  const cv = $("spark"), ctx = cv.getContext("2d"), u = metrics.utilization;
+  const w = cv.width = cv.clientWidth * devicePixelRatio, h = cv.height = 52 * devicePixelRatio;
+  ctx.clearRect(0, 0, w, h);
+  if (!u.length) return;
+  const maxB = Math.max(metrics.pods.length || 8, ...u.map((x) => x.busy)), pad = 2 * devicePixelRatio;
+  const pt = (i) => [(i / Math.max(1, u.length - 1)) * w, h - (u[i].busy / maxB) * (h - pad * 2) - pad];
+  ctx.beginPath(); u.forEach((_, i) => { const [x, y] = pt(i); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue("--leased"); ctx.lineWidth = 1.5 * devicePixelRatio; ctx.stroke();
+  const [lx] = pt(u.length - 1); ctx.lineTo(lx, h); ctx.lineTo(pt(0)[0], h); ctx.closePath();
+  ctx.fillStyle = "oklch(0.82 0.14 75 / 0.13)"; ctx.fill();
+}
+
+// ── Tool call → pod table ─────────────────────────────────────────────────────
+function matchRow(r) {
+  if (!tableQuery) return true;
+  const q = tableQuery.toLowerCase();
+  return [r.sessionId, r.pod, r.status, r.tool, r.detail].some((x) => (x || "").toLowerCase().includes(q));
+}
+function renderRows() {
+  const tbody = $("rows"), rows = metrics.recentToolCalls.filter(matchRow);
+  $("tcp-empty").style.display = rows.length ? "none" : "block";
+  tbody.innerHTML = rows.map((r, i) => {
+    const key = (r.requestId || "") + (r.tool || "") + r.time;
+    const open = expanded.has(key);
+    const main = `<tr class="call ${r.status}" data-k="${key}">
+      <td>${hhmmss(r.time)}</td><td>${r.sessionId || ""}</td><td>${r.tool || ""}</td>
+      <td class="detail">${r.detail || ""}</td>
+      <td class="pod"><span class="pill">${shortPod(r.pod)}</span></td>
+      <td><span class="st">${r.status}</span></td>
+      <td>${r.queueWaitMs ? ms(r.queueWaitMs) : ""}</td><td>${r.durationMs == null ? "" : r.durationMs}</td></tr>`;
+    if (!open) return main;
+    const kv = (k, v) => `<div class="kv"><span class="k">${k}</span><span class="v">${v || "—"}</span></div>`;
+    return main + `<tr class="expand"><td colspan="8"><div class="inner">
+      ${kv("request id", r.requestId)}${kv("session", r.sessionId)}${kv("tool", r.tool)}
+      ${kv("command", r.detail)}${kv("pod", r.pod)}${kv("status", r.status)}
+      ${kv("queue wait", r.queueWaitMs != null ? ms(r.queueWaitMs) : "—")}${kv("exec duration", r.durationMs != null ? r.durationMs + "ms" : "—")}
+    </div></td></tr>`;
+  }).join("");
+  tbody.querySelectorAll("tr.call").forEach((tr) => tr.onclick = () => {
+    const k = tr.dataset.k; expanded.has(k) ? expanded.delete(k) : expanded.add(k); renderRows();
+  });
+}
+
+// ── Pod inspector (inline panel) ──────────────────────────────────────────────
+function openInspector(pod) { selectedPod = pod; $("inspector").classList.add("open"); $("inspector").setAttribute("aria-hidden", "false"); renderInspector(); }
+function closeInspector() { selectedPod = null; $("inspector").classList.remove("open"); $("inspector").setAttribute("aria-hidden", "true"); }
+function renderInspector() {
+  if (!selectedPod) return;
+  const p = metrics.pods.find((x) => x.name === selectedPod); if (!p) return;
+  const calls = metrics.recentToolCalls.filter((r) => r.pod === selectedPod);
+  const durs = calls.filter((c) => c.durationMs != null).map((c) => c.durationMs);
+  const avg = durs.length ? Math.round(durs.reduce((a, b) => a + b, 0) / durs.length) : 0;
+  $("ins-pod").textContent = p.name;
+  $("ins-state").innerHTML = p.status === "leased" ? `<span style="color:var(--leased)">● LEASED</span>` : "○ free";
+  $("ins-body").innerHTML = `
+    <div class="istat">
+      <div class="box"><div class="k">served</div><div class="v">${p.callsServed}</div></div>
+      <div class="box"><div class="k">avg exec</div><div class="v">${avg}<span style="font-size:11px;color:var(--muted)">ms</span></div></div>
+      <div class="box"><div class="k">holder</div><div class="v" style="font-size:12px">${p.status === "leased" ? (p.session || "—") : "—"}</div></div>
+    </div>
+    <div class="label" style="margin-bottom:8px">recent calls on this pod</div>
+    <div class="ilist">${calls.length ? calls.slice(0, 30).map((c) =>
+      `<div class="row"><span class="t">${hhmmss(c.time)}</span><span style="flex:1">${c.detail || c.tool || ""}</span>
+       <span class="st ${c.status}" style="color:var(--${c.status === "completed" ? "ok" : "alert"})">${c.durationMs != null ? c.durationMs + "ms" : c.status}</span></div>`).join("")
+      : '<div class="empty">No calls have run on this pod yet.</div>'}</div>`;
+}
+
+// ── Data plumbing ─────────────────────────────────────────────────────────────
+let pending = false;
+function scheduleRefresh() { if (pending) return; pending = true; setTimeout(() => { pending = false; refreshMetrics(); }, 120); }
+async function refreshMetrics() {
+  try {
+    metrics = await (await fetch("/metrics")).json();
+    renderPods(); renderMetrics(); renderRows(); if (selectedPod) renderInspector();
+  } catch {}
+}
+function connect() {
+  const es = new EventSource("/events");
+  es.onopen = () => { $("lamp").className = "lamp live"; $("conn-text").textContent = "live"; };
+  es.onerror = () => { $("lamp").className = "lamp dead"; $("conn-text").textContent = "reconnecting…"; };
+  es.onmessage = (m) => {
+    try { const e = JSON.parse(m.data); if (e.event === ": ping") return;
+      if (!paused) { events.unshift(e); if (events.length > 400) events.pop(); renderFeed(); }
+      scheduleRefresh();
+    } catch {}
+  };
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2200); }
+function clampConc(v) { return Math.min(50, Math.max(1, parseInt(v) || 1)); }
+$("conc-up").onclick = () => $("conc").value = clampConc(+$("conc").value + 1);
+$("conc-dn").onclick = () => $("conc").value = clampConc(+$("conc").value - 1);
+$("launch").onclick = async () => {
+  const count = clampConc($("conc").value), holdMs = +$("hold").value;
+  $("launch").disabled = true;
+  try {
+    const r = await (await fetch("/demo/run", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ count, holdMs }) })).json();
+    toast(`launched ${r.launched} concurrent · hold ${ms(r.holdMs) || "0"}`);
+  } catch { toast("launch failed — is the server up?"); }
+  setTimeout(() => $("launch").disabled = false, 400);
+};
+document.querySelectorAll(".chip[data-f]").forEach((c) => c.onclick = () => {
+  document.querySelectorAll(".chip[data-f]").forEach((x) => x.classList.remove("on"));
+  c.classList.add("on"); feedFilter = c.dataset.f; renderFeed();
+});
+$("pause").onclick = () => { paused = !paused; $("pause").textContent = paused ? "▶" : "⏸"; $("pause").style.color = paused ? "var(--leased)" : ""; };
+$("tsearch").oninput = (e) => { tableQuery = e.target.value; renderRows(); };
+$("ins-close").onclick = closeInspector;
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeInspector(); });
+
+renderFeed(); refreshMetrics(); setInterval(refreshMetrics, 1000); connect();
+</script>
+</body>
+</html>

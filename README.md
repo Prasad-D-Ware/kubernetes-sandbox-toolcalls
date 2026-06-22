@@ -12,29 +12,63 @@ assigned to a user or session; a Kubernetes `Lease` is the source of truth for l
 - Tool execution mechanism: **`pods/exec`** (see [tradeoff](#tool-execution-podsexec-vs-in-pod-runner)).
 - Lock: **`coordination.k8s.io/v1` Lease** per pod, with optimistic concurrency.
 - Overflow: **process-local bounded FIFO queue**, 15s max wait, then `sandbox_capacity_timeout`.
+- A live **ops dashboard** at `http://localhost:3000/` visualizes the pool, task→pod
+  assignment, queue dynamics, and metrics — and can drive demo load (see [§12](#12-ops-dashboard)).
 
 > Design rationale lives in Architecture Decision Records under `docs/adr/` (kept local;
 > the key tradeoffs are summarized in this README).
 
 ---
 
+## Evaluate in 5 minutes
+
+Prerequisites: **Node ≥ 20**, **Docker** (running), **kubectl**, **kind**, and one LLM
+provider key (OpenAI or Anthropic — see [Configure credentials](#10-configure-real-pi-sdk-credentials)).
+
+```bash
+# 1. install + credentials
+npm install --ignore-scripts
+cp .env.example .env          # set OPENAI_API_KEY=... and PI_MODEL=gpt-4o-mini
+
+# 2. fast offline checks — no cluster, no credentials needed
+npm test                      # 74 unit tests (lease/queue/cleanup, allowlists, HTTP, dashboard)
+
+# 3. stand up the cluster (8 pods + 8 leases) and run the service
+bash scripts/setup-kind.sh
+npm run dev                   # API + dashboard on http://localhost:3000/
+
+# 4. full integration incl. the real Pi-backed smoke test (needs the cluster + key)
+RUN_INTEGRATION=1 npm run test:integration
+
+# 5. see it work: open the dashboard, then either click "▶ launch burst"
+#    or run the script below, and watch the pool / queue / task→pod table react
+bash scripts/demo-9-concurrent.sh
+```
+
+Open **http://localhost:3000/** while step 5 runs. To see the FIFO queue and capacity
+timeout on screen, set the dashboard **hold** to `20s` and **conc** to `9`, then launch.
+
+---
+
 ## Contents
 
-1. [Architecture at a glance](#architecture-at-a-glance)
-2. [Run locally](#1-run-locally)
-3. [Create the local Kubernetes cluster](#2-create-the-local-kubernetes-cluster)
-4. [Apply manifests](#3-apply-manifests)
-5. [Run the API service](#4-run-the-api-service)
-6. [Run tests](#5-run-tests)
-7. [Call `/chat` with curl](#6-call-chat-with-curl)
-8. [How the Lease model works](#7-how-the-lease-model-works)
-9. [How the FIFO queue and max wait work](#8-how-the-fifo-queue-and-max-wait-work)
-10. [How timeouts and cleanup work](#9-how-timeouts-and-cleanup-work)
-11. [Configure real Pi SDK credentials](#10-configure-real-pi-sdk-credentials)
-12. [9 concurrent tool calls example](#9-concurrent-tool-calls-example)
-13. [Tool execution: pods/exec vs in-pod runner](#tool-execution-podsexec-vs-in-pod-runner)
-14. [Security](#security)
-15. [What would change in production](#11-what-would-change-in-production)
+- [Evaluate in 5 minutes](#evaluate-in-5-minutes)
+- [Architecture at a glance](#architecture-at-a-glance)
+1. [Run locally](#1-run-locally)
+2. [Create the local Kubernetes cluster](#2-create-the-local-kubernetes-cluster)
+3. [Apply manifests](#3-apply-manifests)
+4. [Run the API service](#4-run-the-api-service)
+5. [Run tests](#5-run-tests)
+6. [Call `/chat` with curl](#6-call-chat-with-curl)
+7. [How the Lease model works](#7-how-the-lease-model-works)
+8. [How the FIFO queue and max wait work](#8-how-the-fifo-queue-and-max-wait-work)
+9. [How timeouts and cleanup work](#9-how-timeouts-and-cleanup-work)
+10. [Configure real Pi SDK credentials](#10-configure-real-pi-sdk-credentials)
+- [9 concurrent tool calls example](#9-concurrent-tool-calls-example)
+12. [Ops dashboard](#12-ops-dashboard)
+- [Tool execution: pods/exec vs in-pod runner](#tool-execution-podsexec-vs-in-pod-runner)
+- [Security](#security)
+11. [What would change in production](#11-what-would-change-in-production)
 
 ---
 
@@ -66,6 +100,13 @@ POST /chat ─▶ Express (requestId + pino logger)
 | `POST /chat` | Run a chat request + any tool calls; returns final message + `toolCalls[]`. |
 | `GET /pods` | Current pool state derived from Lease objects + pod readiness. |
 | `GET /health` | Service health: K8s connectivity + ready sandbox pod count. |
+| `GET /` | The live **ops dashboard** (static page). |
+| `GET /metrics` | JSON snapshot the dashboard seeds from (pool, counters, latency, task→pod). |
+| `GET /events` | Server-Sent Events stream of every lifecycle event (drives the dashboard). |
+| `POST /demo/run` | Drive demo load: fire N concurrent tool-calling chats + set the lease hold. |
+
+The dashboard, metrics, and event stream are **pure consumers of the structured logs** the
+service already emits — no existing logic was changed to add them.
 
 ---
 
@@ -120,8 +161,9 @@ npm run dev          # tsx watch, reads .env
 npm run build && npm start
 ```
 
-If no provider credential is set, the service **fails fast at startup** with a clear
-message and a non-zero exit — there is no mock fallback.
+This serves the API **and** the ops dashboard on `http://localhost:3000/`. If no provider
+credential is set, the service **fails fast at startup** with a clear message and a non-zero
+exit — there is no mock fallback.
 
 ## 5. Run tests
 
@@ -131,8 +173,8 @@ npm run test:integration # real-cluster + Pi-backed tests (see below)
 ```
 
 Unit tests cover the full lease/queue/cleanup state machine, the security allowlists,
-the tool runner, the pool-state reader, and the HTTP API — **49 tests**, including a
-real 8-way concurrency pressure test. They run offline in ~1s.
+the tool runner, the pool-state reader, the HTTP API, and the dashboard metrics store —
+**74 tests**, including a real 8-way concurrency pressure test. They run offline in ~1s.
 
 Integration tests are guarded by `RUN_INTEGRATION=1` and need a running kind cluster
 (and, for the Pi smoke test, a provider key):
@@ -266,8 +308,14 @@ With 8 pods, the 9th concurrent tool call must queue, then either acquire a free
 time out.
 
 The real tools (`ls`, `pwd`, …) run in ~30ms, so 8 pods absorb 9 staggered calls without
-ever queueing. To make the queue and capacity timeout **observable live**, set
-`DEMO_TOOL_HOLD_MS` (demo-only — holds each lease N ms after the tool runs; default 0):
+ever queueing. To make the queue and capacity timeout **observable live**, hold each lease a
+bit longer (demo-only; default 0).
+
+**Easiest — from the dashboard:** open `http://localhost:3000/`, set **conc** `9` and **hold**
+`20s`, click **launch burst**. Watch 8 tiles go amber, the 9th log `queue.wait.started`, and a
+red `capacity_timeout` row appear.
+
+**Or from the CLI** via the `DEMO_TOOL_HOLD_MS` env (the same knob the dashboard sets):
 
 ```bash
 # terminal 1: hold each lease 3s so 8 pods saturate
@@ -294,6 +342,32 @@ Watch the pool transition while it runs (macOS has no `watch`; use a loop):
 while true; do clear; curl -s http://localhost:3000/pods \
   | jq -c '.pods[] | {name, status: .lease.status}'; sleep 0.3; done
 ```
+
+## 12. Ops dashboard
+
+A live operations dashboard ships with the service at **`http://localhost:3000/`** (no build,
+no separate app — one static page served by the same Express process). It is the fastest way
+to *see* the system work and the recommended surface for a demo.
+
+It shows:
+
+- **Sandbox pool** — 8 instrument tiles, lit amber while leased, with the holder
+  (`session:tool`), TTL countdown, and per-pod calls-served. Click a tile to inspect that
+  pod's recent calls.
+- **Telemetry** — a segmented utilization bar (busy/8), tool-call / queue / latency /
+  conflict readouts, and a utilization sparkline.
+- **Event feed** — the live, color-coded lifecycle stream (`lease.acquired`,
+  `tool.execution.*`, `queue.wait.*`, …); filter by `lease / tool / queue / errors`.
+- **Tool Call → Pod** — exactly which call ran on which pod, with status and timing; click a
+  row to expand the command, request id, holder, queue wait, and exec duration.
+
+It can also **drive load**: the launch deck fires N concurrent tool-calling chats and tunes
+the lease hold (`POST /demo/run`), so a recording needs no terminal.
+
+How it works: the dashboard, `GET /metrics`, and the `GET /events` SSE stream are **pure
+consumers of the structured logs** the service already emits — a pino multistream tap feeds an
+in-process event bus that drives the live stream and an in-memory metrics store. No existing
+lease/queue/tool code was modified to add observability.
 
 ## Tool execution: pods/exec vs in-pod runner
 

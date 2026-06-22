@@ -14,8 +14,9 @@ export interface SandboxToolRunnerOptions {
   /** Optional structured logger for tool.execution.* events. */
   logger?: AppLogger;
   /** Demo-only: hold the lease this many ms after exec, to make the FIFO queue /
-   * capacity timeout observable live with fast tools. Default 0. */
-  demoHoldMs?: number;
+   * capacity timeout observable live with fast tools. Default 0. A function lets
+   * the value change at runtime (the dashboard tunes it via /demo/run). */
+  demoHoldMs?: number | (() => number);
 }
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -92,9 +93,8 @@ export class SandboxToolRunner {
           timeoutMs: this.opts.toolTimeoutMs,
         });
         // Demo-only artificial hold so fast tools can still saturate the pool.
-        if (this.opts.demoHoldMs && this.opts.demoHoldMs > 0) {
-          await delay(this.opts.demoHoldMs);
-        }
+        const holdMs = typeof this.opts.demoHoldMs === "function" ? this.opts.demoHoldMs() : this.opts.demoHoldMs;
+        if (holdMs && holdMs > 0) await delay(holdMs);
         // `timeout` exits 124 when it kills the command.
         if (exec.timedOut || exec.exitCode === 124) {
           log?.warn({ event: LogEvent.ToolExecutionTimedOut, ...logBase, pod }, "tool execution timed out");

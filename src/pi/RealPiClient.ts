@@ -100,8 +100,12 @@ export class RealPiClient implements PiClient {
       toolCallId: string,
       params: Record<string, unknown>,
     ): Promise<ToolResult> => {
+      const detail =
+        typeof params.command === "string" ? params.command :
+        typeof params.path === "string" ? `read ${params.path}` :
+        undefined;
       this.logger.info(
-        { event: LogEvent.ToolCallRequested, requestId: input.requestId, sessionId: input.sessionId, toolCallId, tool },
+        { event: LogEvent.ToolCallRequested, requestId: input.requestId, sessionId: input.sessionId, toolCallId, tool, detail },
         "tool call requested",
       );
       try {
